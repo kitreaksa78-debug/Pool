@@ -3,6 +3,7 @@ import os
 import cv2
 import numpy as np
 import base64
+import math  # បន្ថែមមកដើម្បីគណនាមុំ
 
 app = Flask(__name__)
 
@@ -19,7 +20,6 @@ def calculate():
         if not image_data:
             return jsonify({"status": "error", "message": "No image provided"}), 400
 
-        # បំប្លែង Base64 ទៅជារូបភាព
         if ',' in image_data:
             image_data = image_data.split(',')[1]
         
@@ -30,18 +30,16 @@ def calculate():
         if img is None:
             return jsonify({"status": "error", "message": "Invalid image"}), 400
 
-        # រកកូនប៊ីយ៉ាស (បាល់ពណ៌ស) ដោយប្រើ HSV
+        # ១. រកបាល់ស
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         lower_white = np.array([0, 0, 180]) 
         upper_white = np.array([180, 40, 255])
         mask = cv2.inRange(hsv, lower_white, upper_white)
         
-        # សម្អាតសំរាមជុំវិញ
         kernel = np.ones((5,5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        # រកទីតាំងកូនប៊ីយ៉ាស
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if contours:
@@ -51,16 +49,29 @@ def calculate():
                 cue_ball_x = int(M["m10"] / M["m00"])
                 cue_ball_y = int(M["m01"] / M["m00"])
                 
-                # គូរបន្ទាត់ពីបាល់ស ទៅមុខ ៥០០ ភីកសែល (ជាការសាកល្បង)
-                target_x = cue_ball_x + 500
-                target_y = cue_ball_y
+                # ២. គណនាមុំ (ឧបមាថាយើងចង់វាយទៅស្តាំដៃបន្តិច)
+                # ក្នុងកម្មវិធីពិត អ្នកត្រូវរកទីតាំងបាល់គោលដៅ (Target) ជាមុនសិន
+                target_x = cue_ball_x + 400 
+                target_y = cue_ball_y + 100 
+                
+                # គណនាមុំដោយប្រើ math.atan2
+                angle = math.atan2(target_y - cue_ball_y, target_x - cue_ball_x)
+                
+                # គណនាប្រវែងបន្ទាត់ (ឧទាហរណ៍៖ ទៅមុខ ៦០០ ភីកសែល)
+                line_length = 600
+                endX = int(cue_ball_x + line_length * math.cos(angle))
+                endY = int(cue_ball_y + line_length * math.sin(angle))
+                
+                # ៣. គូរបន្ទាត់លើរូបភាពផ្ទាល់ (ដើម្បីឱ្យ Website បង្ហាញលទ្ធផល)
+                cv2.line(img, (cue_ball_x, cue_ball_y), (endX, endY), (0, 0, 255), 4) # បន្ទាត់ក្រហម
+                
+                # បំប្លែងរូបភាពដែលគូររួច ទៅជា Base64 ដើម្បីផ្ញើទៅ Website
+                _, buffer = cv2.imencode('.jpg', img)
+                processed_image_base64 = base64.b64encode(buffer).decode('utf-8')
                 
                 return jsonify({
                     "status": "success",
-                    "startX": cue_ball_x,
-                    "startY": cue_ball_y,
-                    "endX": target_x,
-                    "endY": target_y
+                    "image": "data:image/jpeg;base64," + processed_image_base64
                 })
         
         return jsonify({"status": "error", "message": "Could not find the cue ball"})
