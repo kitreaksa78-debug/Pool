@@ -14,7 +14,7 @@ def home():
 @app.route('/api/calculate', methods=['POST'])
 def calculate():
     try:
-        # ១. ទទួលរូបភាពពី App
+        # ១. ទទួលទិន្នន័យពី App
         data = request.get_json(force=True)
         image_data = data.get('image')
 
@@ -31,30 +31,23 @@ def calculate():
         if img is None:
             return jsonify({"status": "error", "message": "Invalid image"}), 400
 
-        # ទំហំអេក្រង់របស់អ្នកគឺ 1600x720 (Landscape)
         h, w = img.shape[:2]
 
-        # ---------------------------------------------------------
-        # ២. កំណត់តំបន់តុប៊ីយ៉ា (Region of Interest - ROI)
-        # ដើម្បីកុំឱ្យវាចាប់យក UI ខាងលើ និងខាងក្រោមធ្វើជាបាល់
-        # ---------------------------------------------------------
-        roi_y_start = int(h * 0.15) # កាត់ពីលើចុះមក 15%
-        roi_y_end = int(h * 0.85)   # កាត់ពីក្រោមឡើង 15%
-        roi_x_start = int(w * 0.10) # កាត់ពីឆ្វេងចូល 10%
-        roi_x_end = int(w * 0.90)   # កាត់ពីស្តាំចូល 10%
+        # ២. កាត់យកតែតំបន់តុប៊ីយ៉ា (កាត់ UI ខាងលើចោល និងទុកផ្នែកខាងក្រោមឱ្យធំដើម្បីកុំឱ្យបាត់បាល់ស)
+        roi_y_start = int(h * 0.10) 
+        roi_y_end = int(h * 0.95)   
+        roi_x_start = int(w * 0.05)
+        roi_x_end = int(w * 0.95)
         
         roi_img = img[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
         hsv_roi = cv2.cvtColor(roi_img, cv2.COLOR_BGR2HSV)
 
-        # ---------------------------------------------------------
-        # ៣. រកបាល់ស (Cue Ball)
-        # ---------------------------------------------------------
-        # ជួរពណ៌ស
-        lower_white = np.array([0, 0, 200])
-        upper_white = np.array([180, 40, 255])
+        # ៣. រកបាល់ស (Cue Ball) ដោយប្រើ HSV Color Mask
+        # កែតម្រូវពណ៌ឱ្យធូរជាងមុន ដើម្បីកុំឱ្យបាត់បាល់ពេលមានស្រមោល
+        lower_white = np.array([0, 0, 160]) 
+        upper_white = np.array([180, 60, 255]) 
         mask_white = cv2.inRange(hsv_roi, lower_white, upper_white)
         
-        # សម្អាតសំរាម
         kernel = np.ones((5,5), np.uint8)
         mask_white = cv2.morphologyEx(mask_white, cv2.MORPH_OPEN, kernel)
         
@@ -62,24 +55,23 @@ def calculate():
         
         cue_ball_x, cue_ball_y = None, None
         if contours:
-            largest_white = max(contours, key=cv2.contourArea)
-            # ប្រៀបធៀបទំហំ ដើម្បីកុំឱ្យចាប់យកអក្សរពណ៌សតូចៗ
-            if cv2.contourArea(largest_white) > 200: 
-                M = cv2.moments(largest_white)
-                if M["m00"] != 0:
-                    # បំប្លែងកូអរដោនេ ROI មកទីតាំងដើមវិញ
-                    cue_ball_x = int(M["m10"] / M["m00"]) + roi_x_start
-                    cue_ball_y = int(M["m01"] / M["m00"]) + roi_y_start
+            # តម្រៀបរង្វង់ពីធំទៅតូច រួចយករង្វង់ធំជាងគេដែលជាបាល់ស
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)
+            for c in contours:
+                area = cv2.contourArea(c)
+                if area > 80: # ទំហំអប្បបរមានៃបាល់
+                    M = cv2.moments(c)
+                    if M["m00"] != 0:
+                        cue_ball_x = int(M["m10"] / M["m00"]) + roi_x_start
+                        cue_ball_y = int(M["m01"] / M["m00"]) + roi_y_start
+                        break # បានបាល់សហើយ ឈប់រក
 
-        # ---------------------------------------------------------
         # ៤. រកបាល់គោលដៅ (Target Ball) ដោយប្រើ HoughCircles
-        # ---------------------------------------------------------
         gray_roi = cv2.cvtColor(roi_img, cv2.COLOR_BGR2GRAY)
         gray_roi = cv2.medianBlur(gray_roi, 5)
         
-        # រករង្វង់ (កាំបាល់នៅលើអេក្រង់ 1600x720 មានទំហំប្រហែល 10-18 px)
         circles = cv2.HoughCircles(
-            gray_roi, cv2.HOUGH_GRADIENT, dp=1.2, minDist=25,
+            gray_roi, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30,
             param1=50, param2=25, minRadius=8, maxRadius=20
         )
 
@@ -96,20 +88,18 @@ def calculate():
                 dist = math.hypot(real_x - cue_ball_x, real_y - cue_ball_y)
                 
                 # ប្រសិនបើវាជាបាល់ផ្សេង ហើយនៅជិតជាងគេ
-                if 25 < dist < min_dist: 
+                if 30 < dist < min_dist: 
                     min_dist = dist
                     target_x, target_y = real_x, real_y
 
-        # ---------------------------------------------------------
-        # ៥. គណនាមុំ និងផ្ញើលេខត្រឡប់ទៅវិញ
-        # ---------------------------------------------------------
+        # ៥. គណនាមុំ និងផ្ញើលេខត្រឡប់ទៅ App វិញ
         if cue_ball_x is not None and target_x is not None:
             # គណនាមុំពីបាល់ស ទៅបាល់គោលដៅ
             angle = math.atan2(target_y - cue_ball_y, target_x - cue_ball_x)
             
-            # គូរបន្ទាត់បន្តពីបាល់គោលដៅ ទៅមុខ 300 ភីកសែល
-            endX = int(target_x + 300 * math.cos(angle))
-            endY = int(target_y + 300 * math.sin(angle))
+            # គូរបន្ទាត់បន្តពីបាល់គោលដៅ ទៅមុខ 400 ភីកសែល
+            endX = int(target_x + 400 * math.cos(angle))
+            endY = int(target_y + 400 * math.sin(angle))
             
             return jsonify({
                 "status": "success",
@@ -129,7 +119,7 @@ def calculate():
                 "endY": cue_ball_y
             })
         
-        # បើរកមិនឃើញអ្វីសោះ
+        # បើរកមិនឃើញបាល់សទាល់តែសោះ
         return jsonify({"status": "error", "message": "Could not find cue ball"})
 
     except Exception as e:
